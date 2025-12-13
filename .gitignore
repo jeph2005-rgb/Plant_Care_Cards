@@ -39,3 +39,6 @@ cards/
 # Temporary files
 *.tmp
 =3.0.0
+
+# Deployment package
+deployment/
