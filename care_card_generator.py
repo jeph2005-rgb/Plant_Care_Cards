@@ -1138,6 +1138,125 @@ class PDFGenerator:
 
         return lines if lines else [text]
 
+    def generate_catalog_pdf(self, plants_data: List[Dict]) -> Optional[str]:
+        """
+        Generate a multi-page PDF catalog with all plants.
+        Each page matches the format of the first page of individual care cards.
+
+        Args:
+            plants_data: List of plant data dictionaries
+
+        Returns:
+            Path to generated PDF file or None if failed
+        """
+        if not plants_data:
+            logger.warning("No plants to include in catalog")
+            return None
+
+        try:
+            # Create output directory
+            output_path = Path(self.output_dir)
+            output_path.mkdir(parents=True, exist_ok=True)
+
+            # Generate filename with timestamp
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"Plant_Catalog_{timestamp}.pdf"
+            pdf_path = output_path / filename
+
+            # Create the PDF canvas
+            c = canvas.Canvas(str(pdf_path), pagesize=(PDF_WIDTH, PDF_HEIGHT))
+
+            for idx, plant_data in enumerate(plants_data):
+                # Apply field length limits
+                plant_data = apply_field_limits(plant_data)
+
+                # Draw title at top center
+                c.setFont("Helvetica-Bold", 16)
+                title_text = "Plant Care Guide"
+                title_width = c.stringWidth(title_text, "Helvetica-Bold", 16)
+                title_x = (PDF_WIDTH - title_width) / 2
+                title_y = PDF_HEIGHT - PDF_MARGIN - 5
+                c.drawString(title_x, title_y, title_text)
+
+                # Set up text positioning - start below title
+                y_position = PDF_HEIGHT - PDF_MARGIN - 30
+
+                # Draw scientific name (italic, 14pt)
+                c.setFont("Helvetica-Oblique", 14)
+                scientific_text = plant_data.get('scientific_name', '')
+                text_width = c.stringWidth(scientific_text, "Helvetica-Oblique", 14)
+                x_position = PDF_WIDTH - PDF_MARGIN - text_width
+                c.drawString(x_position, y_position, scientific_text)
+                y_position -= 20
+
+                # Draw common name (bold, 11pt)
+                c.setFont("Helvetica-Bold", 11)
+                common_name = plant_data.get('common_name', '')
+                if common_name:
+                    text_width = c.stringWidth(common_name, "Helvetica-Bold", 11)
+                    x_position = PDF_WIDTH - PDF_MARGIN - text_width
+                    c.drawString(x_position, y_position, common_name)
+                y_position -= 20
+
+                # Draw description (italic, 8pt) - wrapped to full width
+                description = plant_data.get('description', '')
+                if description:
+                    c.setFont("Helvetica-Oblique", 8)
+                    desc_max_width = PDF_WIDTH - (2 * PDF_MARGIN)
+                    wrapped_desc = self._wrap_text(c, description, "Helvetica-Oblique", 8, desc_max_width)
+
+                    for line in wrapped_desc:
+                        c.drawString(PDF_MARGIN, y_position, line)
+                        y_position -= 10
+                    y_position -= 5  # Extra spacing after description
+                else:
+                    y_position -= 10
+
+                # Draw care information (9pt regular)
+                c.setFont("Helvetica", 9)
+                care_fields = [
+                    ('Light:', plant_data.get('light', 'N/A')),
+                    ('Water:', plant_data.get('water', 'N/A')),
+                    ('Feeding:', plant_data.get('feeding', 'N/A')),
+                    ('Temperature:', plant_data.get('temperature', 'N/A')),
+                    ('Humidity:', plant_data.get('humidity', 'N/A')),
+                    ('Toxicity:', plant_data.get('toxicity', 'N/A'))
+                ]
+
+                label_x = PDF_MARGIN
+                value_x = PDF_MARGIN + 80
+                max_width = PDF_WIDTH - value_x - PDF_MARGIN
+
+                for label, value in care_fields:
+                    # Draw label (bold)
+                    c.setFont("Helvetica-Bold", 9)
+                    c.drawString(label_x, y_position, label)
+
+                    # Draw value (regular), wrap if necessary
+                    c.setFont("Helvetica", 9)
+                    wrapped_lines = self._wrap_text(c, value, "Helvetica", 9, max_width)
+
+                    for line in wrapped_lines:
+                        c.drawString(value_x, y_position, line)
+                        y_position -= 12
+
+                    y_position -= 3  # Extra spacing between fields
+
+                # Add new page if not the last plant
+                if idx < len(plants_data) - 1:
+                    c.showPage()
+
+            # Save the PDF
+            c.save()
+            logger.info(f"Catalog PDF generated with {len(plants_data)} pages: {pdf_path}")
+            return str(pdf_path)
+
+        except Exception as e:
+            import traceback
+            logger.error(f"Catalog PDF generation error: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return None
+
 # ============================================================================
 # EDIT PLANT WINDOW
 # ============================================================================
@@ -1416,6 +1535,18 @@ class CareCardGeneratorApp:
         )
         import_button.grid(row=0, column=1, padx=(4, 0), sticky="ew")
 
+        # Export Catalog button
+        export_button = ctk.CTkButton(
+            input_frame,
+            text="Export All Plants to Catalog PDF",
+            command=self._export_catalog,
+            font=ctk.CTkFont(size=13),
+            height=35,
+            fg_color="#1976D2",  # Blue color to distinguish from other buttons
+            hover_color="#1565C0"
+        )
+        export_button.grid(row=3, column=0, pady=(8, 0), sticky="ew")
+
         # Status label
         self.status_label = ctk.CTkLabel(
             input_frame,
@@ -1423,7 +1554,7 @@ class CareCardGeneratorApp:
             font=ctk.CTkFont(size=11),
             text_color=PRIMARY_COLOR
         )
-        self.status_label.grid(row=3, column=0, pady=(5, 0))
+        self.status_label.grid(row=4, column=0, pady=(5, 0))
 
         # History Section
         history_frame = ctk.CTkFrame(left_panel, fg_color="transparent")
@@ -2023,6 +2154,44 @@ class CareCardGeneratorApp:
             logger.error(f"CSV import error: {e}")
             messagebox.showerror("Import Error", f"Failed to import CSV:\n{str(e)}")
             self._update_status("Import failed", ERROR_COLOR)
+
+    def _export_catalog(self) -> None:
+        """Export all plants to a single catalog PDF."""
+        # Get all plants from database
+        plants = self.db.get_all_plants()
+
+        if not plants:
+            messagebox.showinfo("No Plants", "No plants in database to export.")
+            return
+
+        self._update_status("Generating catalog...", PRIMARY_COLOR)
+        self.root.update()
+
+        try:
+            # Generate catalog PDF
+            pdf_path = self.pdf_generator.generate_catalog_pdf(plants)
+
+            if pdf_path:
+                self._update_status(f"Catalog created ({len(plants)} plants)", SUCCESS_COLOR)
+                messagebox.showinfo(
+                    "Catalog Created",
+                    f"Successfully created catalog with {len(plants)} plants.\n\n"
+                    f"Saved to: {pdf_path}"
+                )
+                # Open the PDF
+                self._open_file(pdf_path)
+            else:
+                self._update_status("Catalog generation failed", ERROR_COLOR)
+                messagebox.showerror("Error", "Failed to generate catalog PDF. Check logs for details.")
+
+        except Exception as e:
+            logger.error(f"Catalog export error: {e}")
+            self._update_status("Export failed", ERROR_COLOR)
+            messagebox.showerror("Export Error", f"Failed to export catalog:\n{str(e)}")
+
+        finally:
+            # Reset status after 3 seconds
+            self.root.after(3000, lambda: self._update_status("Ready", PRIMARY_COLOR))
 
     def _open_file(self, file_path: str) -> None:
         """
