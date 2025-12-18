@@ -2216,6 +2216,7 @@ class CareCardGeneratorApp:
                 # Clear input and refresh list
                 self.name_entry.delete(0, 'end')
                 self._refresh_plant_list()
+                self._refresh_plant_dropdown()
             else:
                 self._update_status("PDF generation failed", ERROR_COLOR)
                 messagebox.showerror("Error", "Failed to generate PDF. Check logs for details.")
@@ -2276,8 +2277,9 @@ class CareCardGeneratorApp:
                     f"Successfully imported {imported_count} plants!"
                 )
 
-            # Refresh list
+            # Refresh list and dropdown
             self._refresh_plant_list()
+            self._refresh_plant_dropdown()
             self._update_status(f"Imported {imported_count} plants", SUCCESS_COLOR)
 
             # Reset status after 3 seconds
