@@ -261,6 +261,86 @@ def apply_field_limits(plant_data: Dict) -> Dict:
 
     return limited_data
 
+
+def normalize_scientific_name(name: str) -> str:
+    """
+    Normalize scientific name to proper botanical casing.
+
+    Rules:
+    - Genus (first word): Capitalized (e.g., "Monstera")
+    - Species (second word): lowercase (e.g., "deliciosa")
+    - Subspecies/variety indicators: lowercase (var., subsp., f.)
+    - Cultivar names in quotes: Title Case (e.g., 'Thai Constellation')
+    - Hybrid marker (×): preserved
+
+    Examples:
+    - "MONSTERA DELICIOSA" -> "Monstera deliciosa"
+    - "ficus elastica 'ruby'" -> "Ficus elastica 'Ruby'"
+    - "PHILODENDRON HEDERACEUM VAR. OXYCARDIUM" -> "Philodendron hederaceum var. oxycardium"
+
+    Args:
+        name: Scientific name in any casing
+
+    Returns:
+        Properly formatted scientific name
+    """
+    if not name or not name.strip():
+        return name
+
+    name = name.strip()
+
+    # Handle cultivar names in quotes separately
+    # Split by single quotes to preserve cultivar names
+    parts = re.split(r"('.*?')", name)
+
+    normalized_parts = []
+    for i, part in enumerate(parts):
+        if part.startswith("'") and part.endswith("'"):
+            # This is a cultivar name - use title case inside quotes
+            inner = part[1:-1].strip()
+            normalized_parts.append("'" + inner.title() + "'")
+        else:
+            # Regular scientific name part
+            words = part.split()
+            normalized_words = []
+
+            for j, word in enumerate(words):
+                if not word:
+                    continue
+
+                # Check if it's a special marker
+                lower_word = word.lower()
+
+                if lower_word in ('var.', 'subsp.', 'f.', 'ssp.'):
+                    # Variety/subspecies indicators - lowercase
+                    normalized_words.append(lower_word)
+                elif lower_word == '×' or lower_word == 'x' and len(word) == 1:
+                    # Hybrid marker
+                    normalized_words.append('×')
+                elif j == 0 and not normalized_words:
+                    # First word (genus) - capitalize first letter, rest lowercase
+                    normalized_words.append(word.capitalize())
+                else:
+                    # Species, subspecies names - all lowercase
+                    normalized_words.append(word.lower())
+
+            normalized_parts.append(' '.join(normalized_words))
+
+    # Join parts, ensuring space before cultivar names
+    result_parts = []
+    for i, part in enumerate(normalized_parts):
+        if part.startswith("'") and result_parts and not result_parts[-1].endswith(' '):
+            result_parts.append(' ')
+        result_parts.append(part)
+
+    result = ''.join(result_parts)
+
+    # Clean up any double spaces
+    result = re.sub(r'\s+', ' ', result).strip()
+
+    return result
+
+
 # ============================================================================
 # DATABASE OPERATIONS
 # ============================================================================
@@ -429,6 +509,50 @@ class DatabaseManager:
             logger.error(f"Error retrieving all plants: {e}")
             return []
 
+    def normalize_all_scientific_names(self) -> int:
+        """
+        Normalize scientific names for all existing plants in the database.
+        This is a migration function to fix casing on existing entries.
+
+        Returns:
+            Number of plants updated
+        """
+        updated_count = 0
+
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            # Get all plants
+            cursor.execute("SELECT id, scientific_name FROM plants")
+            rows = cursor.fetchall()
+
+            for row in rows:
+                plant_id = row['id']
+                current_name = row['scientific_name']
+                normalized_name = normalize_scientific_name(current_name)
+
+                if normalized_name != current_name:
+                    cursor.execute(
+                        "UPDATE plants SET scientific_name = ? WHERE id = ?",
+                        (normalized_name, plant_id)
+                    )
+                    logger.info(f"Normalized: '{current_name}' -> '{normalized_name}'")
+                    updated_count += 1
+
+            conn.commit()
+            conn.close()
+
+            if updated_count > 0:
+                logger.info(f"Normalized {updated_count} plant names in database")
+
+            return updated_count
+
+        except sqlite3.Error as e:
+            logger.error(f"Error normalizing plant names: {e}")
+            return 0
+
     def import_from_csv(self, csv_path: str) -> Tuple[int, List[str]]:
         """
         Import plant data from CSV file.
@@ -498,6 +622,9 @@ class DatabaseManager:
                     if not scientific_name:
                         errors.append(f"Row {row_num}: Missing scientific name")
                         continue
+
+                    # Normalize scientific name to proper casing
+                    scientific_name = normalize_scientific_name(scientific_name)
 
                     plant_data = {
                         'scientific_name': scientific_name,
@@ -1437,6 +1564,9 @@ class CareCardGeneratorApp:
         self.pdf_generator = PDFGenerator()
         self.feedback_verifier = FeedbackVerifier()
 
+        # Normalize existing scientific names (one-time migration)
+        self.db.normalize_all_scientific_names()
+
         # Feedback state
         self.pending_corrections = []  # List of corrections awaiting approval
         self.correction_checkboxes = []  # Checkbox widgets for corrections
@@ -2031,6 +2161,9 @@ class CareCardGeneratorApp:
     def _generate_card(self) -> None:
         """Generate a care card for the entered plant."""
         scientific_name = self.name_entry.get().strip()
+
+        # Normalize scientific name to proper casing
+        scientific_name = normalize_scientific_name(scientific_name)
 
         # Validate input
         if not scientific_name:
