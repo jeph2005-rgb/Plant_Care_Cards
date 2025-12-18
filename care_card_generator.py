@@ -75,14 +75,72 @@ from pypdf import PdfWriter, PdfReader
 # CONFIGURATION
 # ============================================================================
 
-# API Configuration
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-if not ANTHROPIC_API_KEY:
-    raise ValueError(
-        "ANTHROPIC_API_KEY environment variable not set.\n"
-        "Please set it using: export ANTHROPIC_API_KEY='your-api-key-here'\n"
-        "Get your API key from: https://console.anthropic.com/"
+# Config file for API key storage
+CONFIG_FILE = "config.json"
+
+def load_api_key() -> str:
+    """Load API key from config file, environment variable, or prompt user."""
+    # First, check environment variable (allows override)
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if api_key:
+        return api_key
+
+    # Second, check config file
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                config = json.load(f)
+                api_key = config.get("anthropic_api_key")
+                if api_key:
+                    return api_key
+        except (json.JSONDecodeError, IOError):
+            pass  # Config file invalid, will prompt user
+
+    # Third, prompt user for API key
+    api_key = prompt_for_api_key()
+    if api_key:
+        save_api_key(api_key)
+        return api_key
+
+    raise ValueError("API key is required to run this application.")
+
+def prompt_for_api_key() -> Optional[str]:
+    """Show a dialog to prompt user for their API key."""
+    import tkinter as tk
+    from tkinter import simpledialog
+
+    # Create a temporary root window (hidden)
+    root = tk.Tk()
+    root.withdraw()
+
+    # Show input dialog
+    api_key = simpledialog.askstring(
+        "API Key Required",
+        "Enter your Anthropic API key:\n\n"
+        "Get your key from: https://console.anthropic.com/\n"
+        "The key will be saved locally in config.json",
+        parent=root
     )
+
+    root.destroy()
+    return api_key.strip() if api_key else None
+
+def save_api_key(api_key: str) -> None:
+    """Save API key to config file."""
+    config = {}
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                config = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    config["anthropic_api_key"] = api_key
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(config, f, indent=2)
+
+# Load API key (will prompt on first run)
+ANTHROPIC_API_KEY = load_api_key()
 
 # Model Configuration
 CLAUDE_MODEL = "claude-sonnet-4-20250514"
