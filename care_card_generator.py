@@ -1384,6 +1384,238 @@ class PDFGenerator:
             logger.error(f"Traceback: {traceback.format_exc()}")
             return None
 
+    def generate_pet_friendly_pdf(self, plants_data: List[Dict], logo_path: str = "Leaf & Vessel.png") -> Optional[str]:
+        """
+        Generate a branded PDF list of pet-friendly plants.
+
+        Args:
+            plants_data: List of plant data dictionaries
+            logo_path: Path to the store logo image
+
+        Returns:
+            Path to generated PDF file or None if failed
+        """
+        # Store information
+        STORE_INFO = {
+            'address1': '46 Ravenna Street, B9',
+            'address2': 'Hudson, OH 44236',
+            'phone': '216-260-5190',
+            'website': 'www.leafandvesselshop.com'
+        }
+
+        def parse_toxicity(toxicity: str) -> dict:
+            """Parse toxicity string to determine pet safety."""
+            if not toxicity:
+                return {'safe_cats': False, 'safe_dogs': False, 'unknown': True}
+
+            toxicity_lower = toxicity.lower()
+
+            # Check for non-toxic
+            if 'non-toxic' in toxicity_lower or 'nontoxic' in toxicity_lower:
+                return {'safe_cats': True, 'safe_dogs': True, 'unknown': False}
+
+            # Check for specific pet mentions
+            toxic_to_cats = 'toxic to cats' in toxicity_lower or 'toxic: toxic to cats' in toxicity_lower
+            toxic_to_dogs = 'toxic to dogs' in toxicity_lower or 'toxic: toxic to dogs' in toxicity_lower
+
+            # Check for safe mentions
+            safe_for_cats = 'safe for cats' in toxicity_lower or 'non-toxic to cats' in toxicity_lower
+            safe_for_dogs = 'safe for dogs' in toxicity_lower or 'non-toxic to dogs' in toxicity_lower
+
+            # If explicitly toxic to both, not pet-friendly
+            if toxic_to_cats and toxic_to_dogs:
+                return {'safe_cats': False, 'safe_dogs': False, 'unknown': False}
+
+            # Determine safety
+            safe_cats = safe_for_cats or (not toxic_to_cats and 'toxic' not in toxicity_lower)
+            safe_dogs = safe_for_dogs or (not toxic_to_dogs and 'toxic' not in toxicity_lower)
+
+            # Handle "mildly toxic" as not fully safe
+            if 'mildly toxic' in toxicity_lower:
+                return {'safe_cats': False, 'safe_dogs': False, 'unknown': False}
+
+            return {
+                'safe_cats': safe_cats and not toxic_to_cats,
+                'safe_dogs': safe_dogs and not toxic_to_dogs,
+                'unknown': False
+            }
+
+        # Filter and categorize pet-friendly plants
+        pet_friendly_plants = []
+        for plant in plants_data:
+            toxicity = plant.get('toxicity', '')
+            safety = parse_toxicity(toxicity)
+
+            # Include if safe for at least one pet type
+            if safety['safe_cats'] or safety['safe_dogs']:
+                note = ''
+                if safety['safe_cats'] and safety['safe_dogs']:
+                    note = ''  # Fully pet-friendly, no note needed
+                elif safety['safe_cats'] and not safety['safe_dogs']:
+                    note = 'Safe for cats, but toxic to dogs'
+                elif safety['safe_dogs'] and not safety['safe_cats']:
+                    note = 'Safe for dogs, but toxic to cats'
+
+                pet_friendly_plants.append({
+                    'common_name': plant.get('common_name', ''),
+                    'scientific_name': plant.get('scientific_name', ''),
+                    'note': note
+                })
+
+        if not pet_friendly_plants:
+            logger.warning("No pet-friendly plants found in database")
+            return None
+
+        # Sort alphabetically by common name, then scientific name
+        pet_friendly_plants.sort(key=lambda p: (p['common_name'].lower() if p['common_name'] else '', p['scientific_name'].lower()))
+
+        try:
+            # Create output directory
+            output_path = Path(self.output_dir)
+            output_path.mkdir(parents=True, exist_ok=True)
+
+            # Generate filename with timestamp
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"Pet_Friendly_Plants_{timestamp}.pdf"
+            pdf_path = output_path / filename
+
+            # Use letter size for printable list (8.5 x 11 inches)
+            page_width = 8.5 * inch
+            page_height = 11 * inch
+            margin = 0.75 * inch
+
+            # Create the PDF
+            c = canvas.Canvas(str(pdf_path), pagesize=(page_width, page_height))
+
+            def draw_header(canvas_obj, y_start):
+                """Draw the branded header with logo and store info."""
+                y = y_start
+
+                # Draw logo if it exists
+                logo_size = 1.2 * inch
+                if os.path.exists(logo_path):
+                    try:
+                        logo = ImageReader(logo_path)
+                        # Center the logo
+                        logo_x = (page_width - logo_size) / 2
+                        canvas_obj.drawImage(logo, logo_x, y - logo_size, width=logo_size, height=logo_size, mask='auto')
+                        y -= logo_size + 15
+                    except Exception as e:
+                        logger.warning(f"Could not load logo: {e}")
+
+                # Store information (centered)
+                canvas_obj.setFont("Helvetica", 10)
+                for line in [STORE_INFO['address1'], STORE_INFO['address2'], STORE_INFO['phone'], STORE_INFO['website']]:
+                    text_width = canvas_obj.stringWidth(line, "Helvetica", 10)
+                    canvas_obj.drawString((page_width - text_width) / 2, y, line)
+                    y -= 14
+
+                y -= 10
+
+                # Title
+                canvas_obj.setFont("Helvetica-Bold", 18)
+                title = "Pet-Friendly Plants"
+                title_width = canvas_obj.stringWidth(title, "Helvetica-Bold", 18)
+                canvas_obj.drawString((page_width - title_width) / 2, y, title)
+                y -= 25
+
+                # Subtitle
+                canvas_obj.setFont("Helvetica-Oblique", 11)
+                subtitle = "Plants that are non-toxic to cats and dogs"
+                subtitle_width = canvas_obj.stringWidth(subtitle, "Helvetica-Oblique", 11)
+                canvas_obj.drawString((page_width - subtitle_width) / 2, y, subtitle)
+                y -= 30
+
+                # Draw a separator line
+                canvas_obj.setStrokeColorRGB(0.3, 0.3, 0.3)
+                canvas_obj.setLineWidth(0.5)
+                canvas_obj.line(margin, y, page_width - margin, y)
+                y -= 20
+
+                return y
+
+            # Start first page
+            y_position = page_height - margin
+            y_position = draw_header(c, y_position)
+
+            # Column headers
+            c.setFont("Helvetica-Bold", 11)
+            c.drawString(margin, y_position, "Common Name")
+            c.drawString(margin + 180, y_position, "Scientific Name")
+            c.drawString(margin + 380, y_position, "Notes")
+            y_position -= 5
+
+            # Line under headers
+            c.setLineWidth(0.3)
+            c.line(margin, y_position, page_width - margin, y_position)
+            y_position -= 15
+
+            # List plants
+            c.setFont("Helvetica", 10)
+            line_height = 16
+            plants_per_page_after_first = 40
+
+            for i, plant in enumerate(pet_friendly_plants):
+                # Check if we need a new page
+                if y_position < margin + 30:
+                    c.showPage()
+                    y_position = page_height - margin
+
+                    # Simplified header for subsequent pages
+                    c.setFont("Helvetica-Bold", 14)
+                    title = "Pet-Friendly Plants (continued)"
+                    title_width = c.stringWidth(title, "Helvetica-Bold", 14)
+                    c.drawString((page_width - title_width) / 2, y_position, title)
+                    y_position -= 25
+
+                    # Column headers
+                    c.setFont("Helvetica-Bold", 11)
+                    c.drawString(margin, y_position, "Common Name")
+                    c.drawString(margin + 180, y_position, "Scientific Name")
+                    c.drawString(margin + 380, y_position, "Notes")
+                    y_position -= 5
+                    c.setLineWidth(0.3)
+                    c.line(margin, y_position, page_width - margin, y_position)
+                    y_position -= 15
+
+                # Draw plant entry
+                c.setFont("Helvetica-Bold", 10)
+                common_name = plant['common_name'] or '-'
+                if len(common_name) > 25:
+                    common_name = common_name[:22] + '...'
+                c.drawString(margin, y_position, common_name)
+
+                c.setFont("Helvetica-Oblique", 10)
+                scientific_name = plant['scientific_name']
+                if len(scientific_name) > 28:
+                    scientific_name = scientific_name[:25] + '...'
+                c.drawString(margin + 180, y_position, scientific_name)
+
+                if plant['note']:
+                    c.setFont("Helvetica", 9)
+                    c.setFillColorRGB(0.6, 0.3, 0.0)  # Brown/orange for warnings
+                    c.drawString(margin + 380, y_position, plant['note'])
+                    c.setFillColorRGB(0, 0, 0)  # Reset to black
+
+                y_position -= line_height
+
+            # Footer with count
+            c.setFont("Helvetica-Oblique", 9)
+            footer_text = f"Total: {len(pet_friendly_plants)} pet-friendly plants"
+            footer_width = c.stringWidth(footer_text, "Helvetica-Oblique", 9)
+            c.drawString((page_width - footer_width) / 2, margin - 10, footer_text)
+
+            # Save the PDF
+            c.save()
+            logger.info(f"Pet-friendly plants PDF generated: {pdf_path}")
+            return str(pdf_path)
+
+        except Exception as e:
+            import traceback
+            logger.error(f"Pet-friendly PDF generation error: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return None
+
 # ============================================================================
 # EDIT PLANT WINDOW
 # ============================================================================
@@ -1677,6 +1909,18 @@ class CareCardGeneratorApp:
         )
         export_button.grid(row=3, column=0, pady=(8, 0), sticky="ew")
 
+        # Pet-Friendly List button
+        pet_friendly_button = ctk.CTkButton(
+            input_frame,
+            text="Export Pet-Friendly Plants List",
+            command=self._export_pet_friendly_list,
+            font=ctk.CTkFont(size=13),
+            height=35,
+            fg_color="#7B1FA2",  # Purple color for this feature
+            hover_color="#6A1B9A"
+        )
+        pet_friendly_button.grid(row=4, column=0, pady=(8, 0), sticky="ew")
+
         # Status label
         self.status_label = ctk.CTkLabel(
             input_frame,
@@ -1684,7 +1928,7 @@ class CareCardGeneratorApp:
             font=ctk.CTkFont(size=11),
             text_color=PRIMARY_COLOR
         )
-        self.status_label.grid(row=4, column=0, pady=(5, 0))
+        self.status_label.grid(row=5, column=0, pady=(5, 0))
 
         # History Section
         history_frame = ctk.CTkFrame(left_panel, fg_color="transparent")
@@ -2323,6 +2567,49 @@ class CareCardGeneratorApp:
             logger.error(f"Catalog export error: {e}")
             self._update_status("Export failed", ERROR_COLOR)
             messagebox.showerror("Export Error", f"Failed to export catalog:\n{str(e)}")
+
+        finally:
+            # Reset status after 3 seconds
+            self.root.after(3000, lambda: self._update_status("Ready", PRIMARY_COLOR))
+
+    def _export_pet_friendly_list(self) -> None:
+        """Export a branded PDF list of pet-friendly plants."""
+        # Get all plants from database
+        plants = self.db.get_all_plants()
+
+        if not plants:
+            messagebox.showinfo("No Plants", "No plants in database to export.")
+            return
+
+        self._update_status("Generating pet-friendly list...", PRIMARY_COLOR)
+        self.root.update()
+
+        try:
+            # Generate pet-friendly PDF
+            pdf_path = self.pdf_generator.generate_pet_friendly_pdf(plants)
+
+            if pdf_path:
+                self._update_status("Pet-friendly list created!", SUCCESS_COLOR)
+                messagebox.showinfo(
+                    "Pet-Friendly List Created",
+                    f"Successfully created pet-friendly plants list.\n\n"
+                    f"Saved to: {pdf_path}"
+                )
+                # Open the PDF
+                self._open_file(pdf_path)
+            else:
+                self._update_status("No pet-friendly plants found", ERROR_COLOR)
+                messagebox.showinfo(
+                    "No Pet-Friendly Plants",
+                    "No pet-friendly plants were found in the database.\n\n"
+                    "Plants must have toxicity information indicating they are "
+                    "non-toxic to cats and/or dogs."
+                )
+
+        except Exception as e:
+            logger.error(f"Pet-friendly list export error: {e}")
+            self._update_status("Export failed", ERROR_COLOR)
+            messagebox.showerror("Export Error", f"Failed to export pet-friendly list:\n{str(e)}")
 
         finally:
             # Reset status after 3 seconds
