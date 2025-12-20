@@ -1488,38 +1488,46 @@ class PDFGenerator:
             c = canvas.Canvas(str(pdf_path), pagesize=(page_width, page_height))
 
             def draw_header(canvas_obj, y_start):
-                """Draw the branded header with logo and store info."""
+                """Draw the branded header with logo and store info in two columns."""
                 y = y_start
 
-                # Draw logo if it exists
+                # Two-column layout: logo on left, store info on right
                 logo_size = 1.2 * inch
+                header_height = logo_size  # Height of the header section
+
+                # Left column: Logo
                 if os.path.exists(logo_path):
                     try:
                         logo = ImageReader(logo_path)
-                        # Center the logo
-                        logo_x = (page_width - logo_size) / 2
+                        logo_x = margin
                         canvas_obj.drawImage(logo, logo_x, y - logo_size, width=logo_size, height=logo_size, mask='auto')
-                        y -= logo_size + 15
                     except Exception as e:
                         logger.warning(f"Could not load logo: {e}")
 
-                # Store information (centered)
+                # Right column: Store information (aligned to right side of logo)
+                info_x = margin + logo_size + 20  # Start after logo with some spacing
+                info_y = y - 15  # Start near top of header
+
+                canvas_obj.setFont("Helvetica-Bold", 12)
+                canvas_obj.drawString(info_x, info_y, "Leaf & Vessel")
+                info_y -= 18
+
                 canvas_obj.setFont("Helvetica", 10)
                 for line in [STORE_INFO['address1'], STORE_INFO['address2'], STORE_INFO['phone'], STORE_INFO['website']]:
-                    text_width = canvas_obj.stringWidth(line, "Helvetica", 10)
-                    canvas_obj.drawString((page_width - text_width) / 2, y, line)
-                    y -= 14
+                    canvas_obj.drawString(info_x, info_y, line)
+                    info_y -= 14
 
-                y -= 10
+                # Move y position below the header
+                y -= header_height + 20
 
-                # Title
+                # Title (centered)
                 canvas_obj.setFont("Helvetica-Bold", 18)
                 title = "Pet-Friendly Plants"
                 title_width = canvas_obj.stringWidth(title, "Helvetica-Bold", 18)
                 canvas_obj.drawString((page_width - title_width) / 2, y, title)
                 y -= 25
 
-                # Subtitle
+                # Subtitle (centered)
                 canvas_obj.setFont("Helvetica-Oblique", 11)
                 subtitle = "Plants that are non-toxic to cats and dogs"
                 subtitle_width = canvas_obj.stringWidth(subtitle, "Helvetica-Oblique", 11)
